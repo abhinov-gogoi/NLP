@@ -1,13 +1,14 @@
 import spacy
 import random
 from spacy.util import minibatch, compounding
-
+from spacy.tokens import DocBin
+from spacy.training import Example
 
 # Load a blank English model
 nlp = spacy.blank("en")
 
 # Define your training data
-train_data = [
+training_data = [
     ("Patient presented with headache and fever.", {"entities": [(24, 32, "SYMPTOM"), (37, 42, "SYMPTOM")]}),
     ("The diagnosis was pneumonia.", {"entities": [(20, 29, "CONDITION")]}),
     ("Prescribe ibuprofen for pain relief.", {"entities": [(10, 19, "MEDICINE")]}),
@@ -253,7 +254,8 @@ train_data = [
     ("The doctor recommended immunotherapy for skin cancer.",
      {"entities": [(21, 33, "PROCEDURE"), (38, 49, "CONDITION")]}),
     (
-    "CT scan showed a cyst in the kidney.", {"entities": [(0, 7, "TEST"), (16, 20, "CONDITION"), (24, 30, "ANATOMY")]}),
+        "CT scan showed a cyst in the kidney.",
+        {"entities": [(0, 7, "TEST"), (16, 20, "CONDITION"), (24, 30, "ANATOMY")]}),
     ("She takes atorvastatin for the management of high cholesterol.",
      {"entities": [(9, 21, "MEDICINE"), (40, 55, "CONDITION")]}),
     ("He was prescribed escitalopram for depression.", {"entities": [(15, 26, "MEDICINE"), (30, 40, "CONDITION")]}),
@@ -301,10 +303,10 @@ train_data = [
     ("She is allergic to pollen and seafood.", {"entities": [(16, 21, "ALLERGY"), (26, 33, "ALLERGY")]}),
     ("The patient was referred to a dermatologist for skin rash.",
      {"entities": [(32, 45, "SPECIALTY"), (49, 58, "SYMPTOM")]}),
-    ("The patient reported joint stiffness and swelling.", {"entities": [(24, 38, "SYMPTOM"), (43, 51, "SYMPTOM")]}),
+    ("The patient reported joMRI scan revealed a tumor in the liverint stiffness and swelling.", {"entities": [(24, 38, "SYMPTOM"), (43, 51, "SYMPTOM")]}),
     ("She was diagnosed with epilepsy and prescribed lamotrigine.",
      {"entities": [(21, 29, "CONDITION"), (48, 59, "MEDICINE")]}),
-    ("MRI scan revealed a tumor in the liver.",
+    (".",
      {"entities": [(0, 8, "TEST"), (24, 29, "CONDITION"), (33, 38, "ANATOMY")]}),
     ("The patient experienced severe abdominal pain and vomiting.",
      {"entities": [(24, 41, "SYMPTOM"), (46, 55, "SYMPTOM")]}),
@@ -336,32 +338,60 @@ train_data = [
 
 ]
 
-# Add entity recognizer to the pipeline
-if "ner" not in nlp.pipe_names:
-    ner = nlp.create_pipe("ner")
-    nlp.add_pipe(ner, last=True)
-    ruler = nlp.add_pipe("entity_ruler")
-else:
-    ner = nlp.get_pipe("ner")
 
-# Add labels to the entity recognizer
-for _, annotations in train_data:
-    for ent in annotations.get("entities"):
-        ner.add_label(ent[2])
+# Function to create spaCy training examples from JSON
+def create_training_examples(traing_data):
+    training_examples = []
+    success = 0
+    error = 0
+    for example in traing_data:
+        text = example[0]
+        entities = example[1]["entities"]
+        doc = nlp.make_doc(text)
+        spans = []
+        for entity in entities:
 
-# Disable other pipelines during training
-other_pipes = [pipe for pipe in nlp.pipe_names if pipe != "ner"]
-with nlp.disable_pipes(*other_pipes):
-    # Train the model
-    optimizer = nlp.begin_training()
-    for itn in range(10):  # Number of iterations
-        random.shuffle(train_data)
-        losses = {}
-        batches = minibatch(train_data, size=compounding(4.0, 32.0, 1.001))
-        for batch in batches:
-            texts, annotations = zip(*batch)
-            nlp.update(texts, annotations, sgd=optimizer, drop=0.35, losses=losses)
-        print("Losses", losses)
+            start = entity[0]
+            end = entity[1]
+            label = entity[2]
 
-# Save the trained model
-nlp.to_disk("trained_medical_ner_model")
+            # span = doc.char_span(start, end, label)
+            try:
+                # span = doc.char_span(start, end, label=label, alignment_mode='strict')
+                span = doc.char_span(start, end, label, alignment_mode='contract')
+            except:
+                continue
+
+
+            if span is not None:
+                spans.append(span)
+                success_data = str([start, end]) + "  ["+label+"]  " + str(text)
+                print(f'SUCCESS :: {success_data}')
+                success = success + 1
+            else:
+                err_data = str([start, end]) + "  ["+label+"]  " + str(text)
+                print(f'ERROR :: {err_data}')
+                error = error + 1
+        training_examples.append(Example.from_dict(doc, {"entities": spans}))
+
+    print(f'Complete :: Success-{success} --- ERROR-{error}')
+    return training_examples
+
+
+# Create spaCy training examples
+training_examples = create_training_examples(training_data)
+
+# Create a DocBin and add the training examples
+doc_bin = DocBin(docs=[example.reference for example in training_examples])
+
+# Save the DocBin to a file
+doc_bin.to_disk("medical.spacy")
+print(f"Saved")
+
+# Generate config file
+# python -m spacy init config config.cfg --lang en --pipeline ner --optimize accuracy
+
+# Start training
+# python -m spacy train config.cfg --output ./ --paths.train spacy-project/medical-detection-training/medical.spacy --paths.dev spacy-project/medical-detection-training/medical.spacy
+
+# Run the trained model
